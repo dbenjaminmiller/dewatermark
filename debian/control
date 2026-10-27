@@ -1,0 +1,16 @@
+Source: dewatermark
+Section: graphics
+Priority: optional
+Maintainer: Daniel Benjamin Miller <dbmiller@dbmiller.org>
+Build-Depends: debhelper-compat (= 13), libopencv-dev, pkg-config
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+
+Package: dewatermark
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: remove a translucent watermark shared by a set of page images
+ dewatermark isolates the translucent watermark that a set of page images has
+ in common, aligns pages on which it is shifted or scaled, and restores every
+ page by exactly inverting the watermark's per-pixel blend. Nothing is painted
+ in. Results are written as LZW-compressed TIFF files.
