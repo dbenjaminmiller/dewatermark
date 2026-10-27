@@ -112,10 +112,11 @@ VERSION ?= 1.0
 TAR     := $(shell command -v gtar || echo tar)
 DIST    := build/dist/dewatermark-$(VERSION).tar.gz
 
+REPO    ?= https://github.com/dbenjaminmiller/dewatermark
+
 dist:
-	rm -rf build/dist && mkdir -p build/dist/dewatermark-$(VERSION)
-	cp -R COPYING ACKNOWLEDGMENTS BUILDING_* Makefile cmake scripts src tools build/dist/dewatermark-$(VERSION)/
-	$(TAR) -C build/dist -czf $(DIST) dewatermark-$(VERSION)
+	rm -rf build/dist && mkdir -p build/dist
+	curl -fsSL -o $(DIST) $(REPO)/archive/refs/tags/v$(VERSION).tar.gz
 
 # Debian source packages for a Launchpad PPA: one shared orig tarball, one upload per series.
 DEBREV  ?= 1

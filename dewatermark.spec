@@ -3,17 +3,15 @@ Version:        1.0
 Release:        1%{?dist}
 Summary:        Remove a translucent watermark shared by a set of page images
 License:        0BSD
-Source0:        %{name}-%{version}.tar.gz
+URL:            https://github.com/dbenjaminmiller/dewatermark
+Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildRequires:  gcc-c++
 BuildRequires:  make
 BuildRequires:  (pkgconfig(opencv5) or pkgconfig(opencv4))
 
 %description
-dewatermark isolates the translucent watermark that a set of page images has
-in common, aligns pages on which it is shifted or scaled, and restores every
-page by exactly inverting the watermark's per-pixel blend. Nothing is painted
-in. Results are written as LZW-compressed TIFF files.
+dewatermark: remove a translucent watermark from a set of images.
 
 %prep
 %autosetup

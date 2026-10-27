@@ -5,10 +5,10 @@ A tool for removing translucent watermarks from a directory of images.
 ## Basic usage
 
 ```
-dpdfcomp [options] input.pdf output.pdf
+dewatermark [options] [input directory]
 ```
 
-The program will automatically create a subdirectory `dewatermark_out` for output TIFFs. If an existing output subdirectory is present, a suffix (`-1`, `-2`, etc.) will be added.
+By default, the current directory will be chosen as the input directory. The program will automatically create a subdirectory `dewatermark_out` for output TIFFs. If an existing output subdirectory is present, a suffix (`-1`, `-2`, etc.) will be added.
 
 ## Options
 
@@ -22,16 +22,30 @@ The program will automatically create a subdirectory `dewatermark_out` for outpu
 
 # Installation
 
-* MacOS users can install via [Homebrew](https://brew.sh): `brew install dbenjaminmiller/tap/dewatermark`.
-* Windows users can download a binary build from the "Releases" tab.
-* Linux users can install from source. Repositories are available for Fedora and Ubuntu.
+## MacOS
+MacOS users can install via [Homebrew](https://brew.sh): `brew install dbenjaminmiller/tap/dewatermark`.
+
+## Linux
+Linux users can install from source. Repositories are currently available for Ubuntu.
+
+Ubuntu:
+
+```
+sudo apt-add-repository ppa:dbmiller/dewatermark
+sudo apt install dewatermark
+```
+
+## Windows
+Windows users can download a binary build from the "Releases" tab.
+
+
+##
 
 # Building
 
 ## MacOS
 
 ```
-xcode-select --install
 brew install opencv pkg-config
 make macos
 ```
