@@ -26,7 +26,14 @@ By default, the current directory will be chosen as the input directory. The pro
 MacOS users can install via [Homebrew](https://brew.sh): `brew install dbenjaminmiller/tap/dewatermark`.
 
 ## Linux
-Linux users can install from source. Repositories are currently available for Ubuntu.
+Linux users can install from source. Repositories are currently available for Fedora/RPM based distributions as well as Ubuntu.
+
+Fedora/RPM-based distributions:
+
+```
+sudo dnf copr enable dbenjaminmiller/dewatermark
+sudo dnf install dewatermark
+```
 
 Ubuntu:
 
