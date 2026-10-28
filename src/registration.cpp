@@ -46,7 +46,7 @@ double paperLevel(const cv::Mat& ch) {
 }
 
 void stackMedian(const std::vector<cv::Mat>& g, const std::vector<Xform>& xf, double div, cv::Size frame,
-                 cv::Mat& med, cv::Mat& count, cv::Mat* darkest, cv::Mat* spread) {
+                 cv::Mat& med, cv::Mat& count, cv::Mat* darkest, cv::Mat* spread, bool skipZero) {
     std::vector<int> use;
     for (size_t k = 0; k < g.size(); ++k) if (xf[k].present) use.push_back((int)k);
     med.create(frame, CV_32F);
@@ -66,7 +66,7 @@ void stackMedian(const std::vector<cv::Mat>& g, const std::vector<Xform>& xf, do
                 for (int k : use) {
                     const Xform& t = xf[k];
                     float s;
-                    if (!sampleAt(g[k], t.a * x + t.bx / div, t.a * y + t.by / div, s)) continue;
+                    if (!sampleAt(g[k], t.a * x + t.bx / div, t.a * y + t.by / div, s) || (skipZero && s < 0.5f)) continue;
                     v.push_back(s);
                     d = std::min(d, s);
                 }
@@ -87,16 +87,44 @@ void stackMedian(const std::vector<cv::Mat>& g, const std::vector<Xform>& xf, do
     });
 }
 
-cv::Mat watermarkAgreement(const cv::Mat& med, const cv::Mat& spread, const cv::Mat& valid, float& paper) {
-    std::vector<float> v;
+cv::Mat watermarkAgreement(const cv::Mat& med, const cv::Mat& spread, const cv::Mat& valid, int wide, float& paper,
+                           double tolerance) {
+    // Paper is the most common tone: content that every page has in much the same place (ruled staves)
+    // would pull a median off it.
+    std::vector<double> hist(256, 0);
     for (int y = 0; y < med.rows; ++y)
         for (int x = 0; x < med.cols; ++x)
-            if (valid.at<uchar>(y, x)) v.push_back(med.at<float>(y, x));
-    if (v.empty()) { paper = 255; return cv::Mat::zeros(med.size(), CV_8U); }
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    paper = v[v.size() / 2];
-    cv::Mat d = cv::abs(med - paper), agree = valid & (d > 4) & (spread < 0.25 * d);
+            if (valid.at<uchar>(y, x)) hist[std::clamp((int)std::lround(med.at<float>(y, x)), 0, 255)]++;
+    int best = -1;
+    double top = 0;
+    for (int t = 0; t < 256; ++t) {
+        double h = 0;
+        for (int u = std::max(0, t - 2); u <= std::min(255, t + 2); ++u) h += hist[u];
+        if (h > top) { top = h; best = t; }
+    }
+    if (best < 0) { paper = 255; return cv::Mat::zeros(med.size(), CV_8U); }
+    paper = (float)best;
+    cv::Mat d = cv::abs(med - paper), agree = valid & (d > 4) & (spread < tolerance * d);
     cv::morphologyEx(agree, agree, cv::MORPH_OPEN, cv::Mat::ones(3, 3, CV_8U));
+    // The scan's background around the sheet is the same on every page too, but it lies at the
+    // image border: wide there, or confined to a band along it. An overlay sits on the page.
+    cv::Mat core, lab;
+    cv::erode(agree, core, cv::getStructuringElement(cv::MORPH_ELLIPSE, {wide, wide}));
+    int n = cv::connectedComponents(agree, lab, 8);
+    std::vector<char> isWide(n, 0), nearBorder(n, 0), atBorder(n, 0), inland(n, 0);
+    for (int y = 0; y < agree.rows; ++y)
+        for (int x = 0; x < agree.cols; ++x)
+            if (int l = lab.at<int>(y, x)) {
+                int edge = std::min({x, y, agree.cols - 1 - x, agree.rows - 1 - y});
+                isWide[l] |= core.at<uchar>(y, x) != 0;
+                nearBorder[l] |= edge < wide;
+                atBorder[l] |= edge == 0;
+                inland[l] |= edge >= wide;
+            }
+    for (int y = 0; y < agree.rows; ++y)
+        for (int x = 0; x < agree.cols; ++x)
+            if (int l = lab.at<int>(y, x); l && ((isWide[l] && nearBorder[l]) || (atBorder[l] && !inland[l])))
+                agree.at<uchar>(y, x) = 0;
     return agree;
 }
 
@@ -230,7 +258,6 @@ static cv::Rect pickRoi(const cv::Mat& tmpl, int side) {
 }
 
 static cv::Mat matchImage(const cv::Mat& gray, double inkClamp) {
-    if (inkClamp >= 255) return gray;
     cv::Mat out;
     cv::max(gray, paperLevel(gray) - inkClamp, out);
     return out;
@@ -251,8 +278,6 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
                 hpS[k] = highpass(downsample(matchImage(grays[k], m.inkClamp), c), o.hpSigma / c);
         });
     };
-    m.inkClamp = 255;
-    prepare();
     m.refSize = grays[0].size();
     m.origin = {0, 0};
     m.frame = m.refSize;
@@ -264,7 +289,7 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
         cv::Mat cnt, spread;
         stackMedian(grays, x, 1, m.frame, med, cnt, nullptr, &spread);
         valid = cnt >= std::max(2, n / 2);
-        return watermarkAgreement(med, spread, valid, paper);
+        return watermarkAgreement(med, spread, valid, o.strokeMax, paper);
     };
     auto coarseTemplate = [&](const std::vector<Xform>& x) {
         cv::Mat med, valid, wm(m.frame, CV_32F), wmSmall, agreeSmall;
@@ -307,6 +332,22 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
         }
         return f;
     };
+    // Ink darker than anything the pages agree on as they are is clamped, so content weighs no more
+    // in matching than the watermark does.
+    auto clampInk = [&](const std::vector<Xform>& x) {
+        cv::Mat med, valid;
+        float paper;
+        cv::Mat agree = fullAgreement(x, med, valid, paper);
+        double lo = paper;
+        if (cv::countNonZero(agree)) cv::minMaxLoc(med, &lo, nullptr, nullptr, nullptr, agree);
+        m.inkClamp = std::max(8.0, paper - std::min<double>(lo, paper) + 8);
+        prepare();
+    };
+    {
+        std::vector<Xform> x(n);
+        for (int k = 0; k < n; ++k) x[k] = initialXform(m, grays[k].size());
+        clampInk(x);
+    }
     const cv::Mat refTemplate = hpS[0](cv::Rect(0, 0, std::min(frameS.width, hpS[0].cols), std::min(frameS.height, hpS[0].rows)));
     auto evaluate = [&](int anchor, bool prop) {
         Model h = m;
@@ -341,8 +382,19 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
     m.anchor = TL;
     m.propScale = false;
     Fit fit = evaluate(TL, false);
-    bool asIs = fit.spread <= 0.5 && fit.shift <= 0.5;
-    if (!asIs) {
+    bool asIs = fit.spread <= 0.5;
+    if (asIs) {
+        // A watermark scaled about its own centre stays put there; scaling shows only in how much better
+        // the pages then match it.
+        Fit scaled = evaluate(TL, true);
+        std::vector<double> n0, n1;
+        for (int k = 0; k < n; ++k) { n0.push_back(fit.x[k].ncc); n1.push_back(scaled.x[k].ncc); }
+        if (median(n1) > 1.2 * median(n0)) {
+            asIs = false;
+            fit = scaled;
+            m.propScale = true;
+        }
+    } else {
         fit = choose(false, fit);
         if (sizesVary) {
             int fixedAnchor = m.anchor;
@@ -351,17 +403,14 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
             else { m.anchor = fixedAnchor; m.propScale = false; }
         }
     }
+    if (asIs) {
+        m.anchor = TL;
+        m.propScale = false;
+        for (int k = 0; k < n; ++k) fit.x[k] = initialXform(m, grays[k].size());
+    }
     xf = fit.x;
 
-    {
-        cv::Mat med, valid;
-        float paper;
-        cv::Mat agree = fullAgreement(xf, med, valid, paper);
-        double lo = paper;
-        cv::minMaxLoc(med, &lo, nullptr, nullptr, nullptr, agree);
-        m.inkClamp = std::max(8.0, paper - std::min<double>(lo, paper) + 8);
-        prepare();
-    }
+    clampInk(xf);
     if (!asIs) refineAll(xf, coarseTemplate(xf), m.propScale);
 
     double minx = 0, miny = 0, maxx = m.refSize.width, maxy = m.refSize.height;
@@ -384,27 +433,28 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
     };
     m.tmplFull = fullTemplate();
     m.fineRoi = pickRoi(m.tmplFull, o.fineRoi);
-    std::vector<Xform> asPlaced = xf;
-    for (int pass = 0; pass < 2; ++pass) {
-        if (pass) {
-            m.tmplFull = fullTemplate();
-            m.fineRoi = pickRoi(m.tmplFull, o.fineRoi);
-        }
+    if (asIs) {
+        // Pages that agree where they are stay there: per-page matching of a faint mark would
+        // only pick up noise from the content.
         cv::parallel_for_(cv::Range(0, n), [&](const cv::Range& r) {
-            for (int k = r.start; k < r.end; ++k) {
-                bool pres = xf[k].present;
-                xf[k] = searchFine(highpass(matchImage(grays[k], m.inkClamp), o.fineSigma), m, xf[k], o);
-                if (!m.propScale) roundPlacement(xf[k]);
-                xf[k].present = pres;
-            }
+            for (int k = r.start; k < r.end; ++k)
+                xf[k].ncc = matchAt(highpass(matchImage(grays[k], m.inkClamp), o.fineSigma), m.tmplFull, m.fineRoi,
+                                    xf[k].a, xf[k].bx, xf[k].by, 0, false).ncc;
         });
-        if (asIs) {
-            for (int k = 0; k < n && asIs; ++k)
-                asIs = (xf[k].bx == asPlaced[k].bx && xf[k].by == asPlaced[k].by) || !xf[k].present;
-            if (asIs) {
-                for (int k = 0; k < n; ++k) { double ncc = xf[k].ncc; xf[k] = asPlaced[k]; xf[k].ncc = ncc; }
-                break;
+    } else {
+        for (int pass = 0; pass < 2; ++pass) {
+            if (pass) {
+                m.tmplFull = fullTemplate();
+                m.fineRoi = pickRoi(m.tmplFull, o.fineRoi);
             }
+            cv::parallel_for_(cv::Range(0, n), [&](const cv::Range& r) {
+                for (int k = r.start; k < r.end; ++k) {
+                    bool pres = xf[k].present;
+                    xf[k] = searchFine(highpass(matchImage(grays[k], m.inkClamp), o.fineSigma), m, xf[k], o);
+                    if (!m.propScale) roundPlacement(xf[k]);
+                    xf[k].present = pres;
+                }
+            });
         }
     }
     m.align = !asIs;
@@ -414,6 +464,82 @@ void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>
     m.tmplFull = fullTemplate();
     frameS = cv::Size(m.frame.width / c, m.frame.height / c);
     m.tmplSmall = coarseTemplate(xf);
+}
+
+// Scaled pages are first matched to what all pages agree on, which may include content they share in
+// layout (ruled staves); once the watermark itself is known, each page is matched to its text line,
+// at both ends to fix the scale as well. A page keeps the new placement only where it matches better.
+WatermarkLine watermarkLine(const Model& m) {
+    WatermarkLine L;
+    std::vector<cv::Mat> g, t;
+    cv::split(m.gain, g);
+    cv::split(m.offset, t);
+    cv::Mat effect = cv::Mat::zeros(m.frame, CV_32F);
+    for (int c = 0; c < 3; ++c) effect += ((g[c] - 1) * 200 + t[c]) / 3;
+    cv::Mat mark = cv::abs(effect) > 4, lab, stats, cent;
+    cv::morphologyEx(mark, mark, cv::MORPH_CLOSE, cv::Mat::ones(9, 9, CV_8U));
+    int n = cv::connectedComponentsWithStats(mark, lab, stats, cent, 8, CV_32S);
+    int big = 0;
+    for (int i = 1; i < n; ++i) if (!big || stats.at<int>(i, cv::CC_STAT_AREA) > stats.at<int>(big, cv::CC_STAT_AREA)) big = i;
+    if (!big) return L;
+    int top = stats.at<int>(big, cv::CC_STAT_TOP), bottom = top + stats.at<int>(big, cv::CC_STAT_HEIGHT);
+    cv::Mat line = cv::Mat::zeros(m.frame, CV_8U);
+    for (int i = 1; i < n; ++i) {
+        double cy = cent.at<double>(i, 1);
+        if (cy >= top && cy <= bottom && stats.at<int>(i, cv::CC_STAT_AREA) > 30) line |= lab == i;
+    }
+    cv::Rect box = maskBounds(line);
+    box = cv::Rect(box.x - 6, box.y - 6, box.width + 12, box.height + 12) & cv::Rect(0, 0, m.frame.width, m.frame.height);
+    if (box.width < 80) return L;
+    cv::dilate(line, line, cv::Mat::ones(5, 5, CV_8U));
+    cv::Mat masked = cv::Mat::zeros(m.frame, CV_32F);
+    effect.copyTo(masked, line);
+    L.tmpl = highpass(masked(box), 3);
+    L.box = box;
+    return L;
+}
+
+static double lineFit(const cv::Mat& hp, const WatermarkLine& L, const Xform& x, cv::Point2d* ends) {
+    const int R = 6, half = L.box.width / 2;
+    double score = 0;
+    for (int k = 0; k < 2; ++k) {
+        cv::Rect part(k * half, 0, k ? L.box.width - half : half, L.box.height);
+        cv::Mat M(cv::Matx23d(x.a, 0, x.a * (L.box.x + part.x - R) + x.bx, 0, x.a, x.a * (L.box.y - R) + x.by)), win, r;
+        cv::warpAffine(hp, win, M, cv::Size(part.width + 2 * R, part.height + 2 * R), cv::INTER_LINEAR | cv::WARP_INVERSE_MAP);
+        cv::matchTemplate(win, L.tmpl(part), r, cv::TM_CCORR_NORMED);
+        cv::patchNaNs(r, -1);
+        score += r.at<float>(R, R);
+        if (!ends) continue;
+        cv::Point p;
+        double mx;
+        cv::minMaxLoc(r, nullptr, &mx, nullptr, &p);
+        double dx = p.x, dy = p.y;
+        if (p.x > 0 && p.x < r.cols - 1) dx += parabola(r.at<float>(p.y, p.x - 1), mx, r.at<float>(p.y, p.x + 1));
+        if (p.y > 0 && p.y < r.rows - 1) dy += parabola(r.at<float>(p.y - 1, p.x), mx, r.at<float>(p.y + 1, p.x));
+        ends[k] = {L.box.x + part.x + part.width / 2.0 + dx - R, L.box.y + L.box.height / 2.0 + dy - R};
+    }
+    return score;
+}
+
+Xform refineToLine(const cv::Mat& gray, const Model& m, const WatermarkLine& L, Xform x) {
+    if (L.tmpl.empty() || !x.present) return x;
+    cv::Mat hp = highpass(matchImage(gray, m.inkClamp), 3);
+    Xform best = x;
+    double before = lineFit(hp, L, x, nullptr);
+    const int half = L.box.width / 2;
+    const double U1 = L.box.x + half / 2.0, U2 = L.box.x + half + (L.box.width - half) / 2.0, V = L.box.y + L.box.height / 2.0;
+    for (int it = 0; it < 3; ++it) {
+        cv::Point2d e[2];
+        lineFit(hp, L, x, e);
+        Xform n = x;
+        n.a = (x.a * e[1].x - x.a * e[0].x) / (U2 - U1);
+        n.bx = x.a * e[0].x + x.bx - n.a * U1;
+        n.by = x.a * (e[0].y + e[1].y) / 2 + x.by - n.a * V;
+        if (std::fabs(n.a / x.a - 1) > 0.02) break;
+        x = n;
+    }
+    if (lineFit(hp, L, x, nullptr) > before + 0.01) { best.a = x.a; best.bx = x.bx; best.by = x.by; }
+    return best;
 }
 
 Xform registerPage(const cv::Mat& gray, const Model& m, const Options& o) {
@@ -428,5 +554,6 @@ Xform registerPage(const cv::Mat& gray, const Model& m, const Options& o) {
     x = searchFine(highpass(g, o.fineSigma), m, x, o);
     if (!m.propScale) roundPlacement(x);
     x.present = x.ncc >= o.presentRatio * m.medNcc;
+    if (m.propScale) x = refineToLine(gray, m, watermarkLine(m), x);
     return x;
 }

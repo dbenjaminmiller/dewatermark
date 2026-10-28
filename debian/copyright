@@ -1,5 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: dewatermark
+Source: https://github.com/dbenjaminmiller/dewatermark
 
 Files: *
 Copyright: 2026 Daniel Benjamin Miller

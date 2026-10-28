@@ -108,7 +108,7 @@ notarize:
 	cd $(MAC) && rm -f dewatermark-macos.zip && zip -qry dewatermark-macos.zip dewatermark $(if $(wildcard $(MAC)/lib),lib)
 	xcrun notarytool submit $(MAC)/dewatermark-macos.zip --keychain-profile "$(NOTARY_PROFILE)" --wait
 
-VERSION ?= 1.0
+VERSION ?= 1.1
 TAR     := $(shell command -v gtar || echo tar)
 DIST    := build/dist/dewatermark-$(VERSION).tar.gz
 

@@ -34,6 +34,7 @@ struct Options {
     double alphaMin = 0.005;
 
     int inkSize = 31;
+    double inkLevel = 24;
     int block = 16;
     double flatMaxGain = 0.9;
 };
@@ -83,10 +84,17 @@ cv::Mat highpass(const cv::Mat& src, double sigma);
 Xform initialXform(const Model& m, cv::Size page);
 double paperLevel(const cv::Mat& channel);
 void stackMedian(const std::vector<cv::Mat>& g, const std::vector<Xform>& xf, double div, cv::Size frame,
-                 cv::Mat& med, cv::Mat& count, cv::Mat* darkest = nullptr, cv::Mat* spread = nullptr);
-cv::Mat watermarkAgreement(const cv::Mat& med, const cv::Mat& spread, const cv::Mat& valid, float& paper);
+                 cv::Mat& med, cv::Mat& count, cv::Mat* darkest = nullptr, cv::Mat* spread = nullptr, bool skipZero = false);
+cv::Mat watermarkAgreement(const cv::Mat& med, const cv::Mat& spread, const cv::Mat& valid, int wide, float& paper,
+                           double tolerance = 0.25);
 void registerSet(const std::vector<cv::Mat>& grays, Model& m, std::vector<Xform>& xf, const Options& o);
 Xform registerPage(const cv::Mat& gray, const Model& m, const Options& o);
+struct WatermarkLine {
+    cv::Mat tmpl;
+    cv::Rect box;
+};
+WatermarkLine watermarkLine(const Model& m);
+Xform refineToLine(const cv::Mat& gray, const Model& m, const WatermarkLine& L, Xform x);
 
 void estimateWatermark(const std::vector<std::string>& files, const std::vector<cv::Mat>& grays,
                        const std::vector<Xform>& xf, Model& m, const Options& o);
@@ -94,3 +102,4 @@ void estimateWatermark(const std::vector<std::string>& files, const std::vector<
 bool saveModel(const std::string& prefix, const Model& m);
 bool loadModel(const std::string& prefix, Model& m);
 cv::Mat removeWatermark(const cv::Mat& page, const Model& m, const Xform& x);
+double watermarkFit(const cv::Mat& page, const Model& m, const Xform& x);

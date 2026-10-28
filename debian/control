@@ -4,6 +4,9 @@ Priority: optional
 Maintainer: Daniel Benjamin Miller <dbmiller@dbmiller.org>
 Build-Depends: debhelper-compat (= 13), libopencv-dev, pkg-config
 Standards-Version: 4.6.0
+Homepage: https://github.com/dbenjaminmiller/dewatermark
+Vcs-Browser: https://github.com/dbenjaminmiller/dewatermark
+Vcs-Git: https://github.com/dbenjaminmiller/dewatermark.git
 Rules-Requires-Root: no
 
 Package: dewatermark

@@ -36,7 +36,7 @@ static std::vector<std::string> utf8Args(int argc, char** argv) {
 }
 
 static const char* kHelp =
-    "dewatermark version 1.0\n"
+    "dewatermark version 1.1\n"
     "\n"
     "usage: dewatermark [options] [input directory]\n"
     "\n"
@@ -128,11 +128,29 @@ int main(int argc, char** argv) {
         cv::parallel_for_(cv::Range(0, ne), [&](const cv::Range& r) {
             for (int j = r.start; j < r.end; ++j) grays[j] = readImage(ef[j], cv::IMREAD_GRAYSCALE);
         });
-        for (int j = 0; j < ne; ++j) if (grays[j].empty()) { fprintf(stderr, "cannot read %s\n", ef[j].c_str()); return 1; }
+        for (int j = ne - 1; j >= 0; --j)
+            if (grays[j].empty()) {
+                fprintf(stderr, "cannot read %s\n", ef[j].c_str());
+                est.erase(est.begin() + j); ef.erase(ef.begin() + j); grays.erase(grays.begin() + j);
+            }
+        ne = (int)ef.size();
+        if (!ne) { fprintf(stderr, "no readable images in %s\n", in.c_str()); return 1; }
         fprintf(stderr, "registering %d pages\n", ne);
         std::vector<Xform> ex;
         registerSet(grays, m, ex, o);
         estimateWatermark(ef, grays, ex, m, o);
+        for (int round = 0; round < 2 && m.propScale; ++round) {
+            WatermarkLine L = watermarkLine(m);
+            std::vector<Xform> before = ex;
+            cv::parallel_for_(cv::Range(0, ne), [&](const cv::Range& r) {
+                for (int j = r.start; j < r.end; ++j) ex[j] = refineToLine(grays[j], m, L, ex[j]);
+            });
+            int moved = 0;
+            for (int j = 0; j < ne; ++j) moved += ex[j].a != before[j].a || ex[j].bx != before[j].bx || ex[j].by != before[j].by;
+            fprintf(stderr, "matching pages to the watermark itself: %d of %d placements refined\n", moved, ne);
+            if (!moved) break;
+            estimateWatermark(ef, grays, ex, m, o);
+        }
         for (int j = 0; j < ne; ++j) { xf[est[j]] = ex[j]; known[est[j]] = 1; }
     }
     if (!saveW.empty() && !saveModel(saveW, m)) { fprintf(stderr, "cannot save watermark %s\n", saveW.c_str()); return 1; }
@@ -156,6 +174,7 @@ int main(int argc, char** argv) {
                 cv::cvtColor(g, g, cv::COLOR_BGR2GRAY);
                 x = registerPage(g, m, o);
             }
+            if (!x.present) x.present = watermarkFit(page, m, x) > 0.5;
             cv::Mat J = removeWatermark(page, m, x), result;
             J.convertTo(result, page.type());
             auto dst = outputFor(files[k]);

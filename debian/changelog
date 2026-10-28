@@ -1,3 +1,9 @@
+dewatermark (1.1-1) noble; urgency=medium
+
+  * Algorithm improvements.
+
+ -- Daniel Benjamin Miller <dbmiller@dbmiller.org>  Wed, 28 Oct 2026 09:00:00 -0400
+
 dewatermark (1.0-1~noble1) noble; urgency=medium
 
   * Initial release.
